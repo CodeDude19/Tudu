@@ -1,0 +1,13 @@
+{
+  "name": "Tudu",
+  "short_name": "Tudu",
+  "description": "Voice-first AI task app",
+  "start_url": "/Tudu/",
+  "scope": "/Tudu/",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

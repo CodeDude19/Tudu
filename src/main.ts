@@ -389,6 +389,11 @@ archiveBtn.addEventListener('click', () => {
 
 archiveClose.addEventListener('click', closeArchive);
 
+// ── Service Worker ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/Tudu/sw.js');
+}
+
 // ── Init ──
 const key = getApiKey();
 if (key) {
