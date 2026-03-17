@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>tudu</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <!-- API Key Modal -->
+    <div id="cred-overlay" class="overlay hidden">
+      <div class="modal glass">
+        <button id="close-creds" class="modal-close btn-icon" title="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+        <h2>setup</h2>
+        <p class="modal-subtitle">Enter your Bedrock API key to get started</p>
+        <div class="form-group">
+          <label for="api-key">API Key</label>
+          <input type="password" id="api-key" placeholder="Enter your Bedrock API key..." autocomplete="off" />
+        </div>
+        <button id="save-creds" class="btn-primary">Connect</button>
+      </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" class="hidden">
+      <!-- Top bar -->
+      <header>
+        <div class="header-title">
+          <h1>tudu</h1>
+          <span class="header-byline">by Yasser</span>
+        </div>
+        <div class="header-actions">
+          <button id="archive-btn" class="btn-icon" title="Archive">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="5" rx="2"/><path d="M2 8v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>
+            </svg>
+          </button>
+          <button id="history-btn" class="btn-icon" title="Input History">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </button>
+          <button id="settings-btn" class="btn-icon" title="Settings">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M12 1v6M12 17v6M4.22 4.22l4.24 4.24M15.54 15.54l4.24 4.24M1 12h6M17 12h6M4.22 19.78l4.24-4.24M15.54 8.46l4.24-4.24"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- History Panel (replaces task area) -->
+      <div id="history-panel" class="history-panel hidden">
+        <div class="history-spacer"></div>
+        <div class="section-divider">
+          <span>History</span>
+        </div>
+        <ul id="history-list"></ul>
+        <p id="history-empty" class="empty-state hidden">Nothing here yet.</p>
+        <button id="history-close" class="history-back">
+          Back
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Scrollable task area (reverse order: newest at bottom) -->
+      <!-- Task area -->
+      <div id="task-area" class="task-area">
+        <div class="task-area-spacer"></div>
+        <p id="empty-state" class="empty-state">No tasks yet. Tap the mic below to get started.</p>
+        <ul id="task-list"></ul>
+      </div>
+
+      <!-- Archive panel (replaces task area) -->
+      <div id="archive-panel" class="archive-panel hidden">
+        <div class="archive-spacer"></div>
+        <div class="section-divider">
+          <span>Archive</span>
+        </div>
+        <ul id="archive-list"></ul>
+        <p id="archive-empty" class="empty-state hidden">Nothing archived yet.</p>
+        <button id="archive-close" class="history-back">
+          Back
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Bottom input dock -->
+      <div class="input-dock">
+        <!-- Transcript preview -->
+        <div id="transcript-preview" class="transcript-preview hidden">
+          <div class="transcript-label">
+            <span class="transcript-status">Listening...</span>
+          </div>
+          <p id="transcript-text" class="transcript-text"></p>
+        </div>
+
+        <p id="error-msg" class="error hidden"></p>
+
+        <!-- Waveform visualizer (visible during recording) -->
+        <div id="waveform" class="waveform hidden"></div>
+
+        <!-- Island: unified pill with Type + Voice -->
+        <div id="island" class="island">
+          <!-- Type side -->
+          <button id="text-toggle-btn" class="island-type" aria-label="Type">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 10H3"/><path d="M21 6H3"/><path d="M21 14H3"/><path d="M17 18H3"/>
+            </svg>
+            <span>Type</span>
+          </button>
+
+          <!-- Text input (hidden, expands when typing) -->
+          <form id="task-form" class="island-form">
+            <input type="text" id="task-input" placeholder="What needs doing..." autocomplete="off" />
+            <button type="submit" id="submit-btn" class="island-send" aria-label="Add">
+              <span class="btn-text">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                </svg>
+              </span>
+              <span class="btn-loading hidden">
+                <svg class="spinner" width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/></svg>
+              </span>
+            </button>
+          </form>
+
+          <!-- Voice pill -->
+          <button id="voice-btn" class="island-voice" aria-label="Tap to speak">
+            <div class="voice-btn-rings">
+              <div class="voice-ring voice-ring-1"></div>
+              <div class="voice-ring voice-ring-2"></div>
+              <div class="voice-ring voice-ring-3"></div>
+            </div>
+            <svg class="island-voice-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/>
+              <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+            <span class="island-voice-label">Speak</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
