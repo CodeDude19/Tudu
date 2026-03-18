@@ -1,12 +1,9 @@
-import { pipeline } from '@huggingface/transformers';
-
 export interface SpeechCallbacks {
   onStart: () => void;
-  onTranscribing: () => void;
+  onInterimResult: (transcript: string) => void;
   onFinalResult: (transcript: string) => void;
   onError: (error: string) => void;
   onEnd: () => void;
-  onModelLoading: (progress: number) => void;
 }
 
 export interface SpeechController {
@@ -16,34 +13,9 @@ export interface SpeechController {
   isSupported: () => boolean;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let transcriber: any = null;
-let modelLoading = false;
+const DG_WS_URL = 'wss://api.deepgram.com/v1/listen?model=nova-3&language=en&smart_format=true&interim_results=true&utterance_end_ms=1000';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getTranscriber(onProgress: (p: number) => void): Promise<any> {
-  if (transcriber) return transcriber;
-  if (modelLoading) throw new Error('Model is still loading');
-  modelLoading = true;
-  try {
-    transcriber = await pipeline(
-      'automatic-speech-recognition',
-      'onnx-community/whisper-tiny.en',
-      {
-        dtype: 'q8' as const,
-        device: 'wasm' as const,
-        progress_callback: (p: Record<string, unknown>) => {
-          if (typeof p.progress === 'number') onProgress(p.progress);
-        },
-      } as Parameters<typeof pipeline>[2],
-    );
-    return transcriber;
-  } finally {
-    modelLoading = false;
-  }
-}
-
-export function createSpeechController(callbacks: SpeechCallbacks): SpeechController {
+export function createSpeechController(apiKey: string, callbacks: SpeechCallbacks): SpeechController {
   const supported = typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
 
   if (!supported) {
@@ -56,54 +28,60 @@ export function createSpeechController(callbacks: SpeechCallbacks): SpeechContro
   }
 
   let mediaRecorder: MediaRecorder | null = null;
-  let audioChunks: Blob[] = [];
-  let listening = false;
   let stream: MediaStream | null = null;
+  let ws: WebSocket | null = null;
+  let listening = false;
+  let accumulated = '';
 
   async function startRecording(): Promise<void> {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioChunks = [];
-      mediaRecorder = new MediaRecorder(stream);
+      accumulated = '';
 
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunks.push(e.data);
-      };
+      // Connect to Deepgram WebSocket
+      ws = new WebSocket(DG_WS_URL, ['token', apiKey]);
 
-      mediaRecorder.onstop = async () => {
-        // Release mic
-        stream?.getTracks().forEach((t) => t.stop());
-        stream = null;
+      ws.onopen = () => {
+        // Start MediaRecorder and pipe audio chunks to WebSocket
+        mediaRecorder = new MediaRecorder(stream!, { mimeType: getSupportedMimeType() });
 
-        if (audioChunks.length === 0) {
-          callbacks.onError('No audio recorded.');
-          callbacks.onEnd();
-          return;
-        }
-
-        const audioBlob = new Blob(audioChunks, { type: mediaRecorder!.mimeType });
-        const audioUrl = URL.createObjectURL(audioBlob);
-        callbacks.onTranscribing();
-
-        try {
-          const model = await getTranscriber(callbacks.onModelLoading);
-          const result = await model(audioUrl);
-          URL.revokeObjectURL(audioUrl);
-          const text = (result as { text: string }).text?.trim() || '';
-          if (text) {
-            callbacks.onFinalResult(text);
-          } else {
-            callbacks.onError('No speech detected. Try again.');
+        mediaRecorder.ondataavailable = (e: BlobEvent) => {
+          if (e.data.size > 0 && ws?.readyState === WebSocket.OPEN) {
+            e.data.arrayBuffer().then((buf) => ws?.send(buf));
           }
-        } catch (err) {
-          callbacks.onError(err instanceof Error ? err.message : 'Transcription failed.');
-        }
-        callbacks.onEnd();
+        };
+
+        mediaRecorder.start(100);
+        listening = true;
+        callbacks.onStart();
       };
 
-      mediaRecorder.start(250); // collect chunks every 250ms
-      listening = true;
-      callbacks.onStart();
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          const transcript = data.channel?.alternatives?.[0]?.transcript;
+          if (!transcript) return;
+
+          if (data.is_final) {
+            accumulated += (accumulated ? ' ' : '') + transcript;
+            callbacks.onFinalResult(accumulated);
+          } else {
+            callbacks.onInterimResult(accumulated + (accumulated ? ' ' : '') + transcript);
+          }
+        } catch { /* ignore parse errors */ }
+      };
+
+      ws.onerror = () => {
+        callbacks.onError('Connection to Deepgram failed. Check your API key.');
+        cleanup();
+      };
+
+      ws.onclose = () => {
+        if (listening) {
+          listening = false;
+          callbacks.onEnd();
+        }
+      };
     } catch (err) {
       const msg = err instanceof DOMException && err.name === 'NotAllowedError'
         ? 'Microphone permission denied.'
@@ -112,15 +90,38 @@ export function createSpeechController(callbacks: SpeechCallbacks): SpeechContro
     }
   }
 
+  function cleanup(): void {
+    listening = false;
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+    }
+    stream?.getTracks().forEach((t) => t.stop());
+    stream = null;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
+    ws = null;
+  }
+
   return {
     start: () => { startRecording(); },
     stop: () => {
-      if (mediaRecorder && mediaRecorder.state === 'recording') {
-        listening = false;
-        mediaRecorder.stop();
+      if (!listening) return;
+      if (accumulated) {
+        callbacks.onFinalResult(accumulated);
       }
+      cleanup();
+      callbacks.onEnd();
     },
     isListening: () => listening,
     isSupported: () => true,
   };
+}
+
+function getSupportedMimeType(): string {
+  const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+  for (const type of types) {
+    if (MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return 'audio/webm';
 }

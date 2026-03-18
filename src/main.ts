@@ -1,4 +1,4 @@
-import { getApiKey, saveApiKey, addToHistory, getHistory } from './storage';
+import { getApiKey, saveApiKey, getDeepgramKey, saveDeepgramKey, addToHistory, getHistory } from './storage';
 import { initClient, generateTasks } from './bedrock';
 import { createSpeechController } from './speech';
 import { renderTasks, renderArchive, addTask, replaceTask, showError, setLoading, setVoiceRedoHandler } from './ui';
@@ -92,13 +92,13 @@ const archivePanel = document.getElementById('archive-panel')!;
 const archiveClose = document.getElementById('archive-close')!;
 
 // ── App state ──
-type AppState = 'idle' | 'recording' | 'transcribing' | 'generating';
+type AppState = 'idle' | 'recording' | 'generating';
 let appState: AppState = 'idle';
 let redoTaskId: string | null = null;
 
 function setAppState(state: AppState): void {
   appState = state;
-  island.classList.remove('recording', 'generating', 'transcribing', 'typing');
+  island.classList.remove('recording', 'generating', 'typing');
 
   switch (state) {
     case 'idle':
@@ -122,56 +122,52 @@ function setAppState(state: AppState): void {
       transcriptText.textContent = '';
       startWaveform();
       break;
-    case 'transcribing':
-      island.classList.add('transcribing');
-      voiceLabel.textContent = 'Transcribing...';
-      (voiceBtn as HTMLButtonElement).disabled = true;
-      stopWaveform();
-      transcriptPreview.classList.remove('hidden');
-      transcriptPreview.classList.remove('dock-fade-out');
-      transcriptStatus.textContent = 'Transcribing...';
-      transcriptText.textContent = '';
-      break;
     case 'generating':
       island.classList.add('generating');
       voiceLabel.textContent = redoTaskId ? 'Updating...' : 'Generating...';
       (voiceBtn as HTMLButtonElement).disabled = true;
       transcriptStatus.textContent = redoTaskId ? 'Updating task...' : 'Generating tasks...';
+      stopWaveform();
       break;
   }
 }
 
-// ── Speech controller ──
+// ── Speech controller (lazy init — needs Deepgram key) ──
 let finalTranscript = '';
+let speech: ReturnType<typeof createSpeechController> | null = null;
 
-const speech = createSpeechController({
-  onStart: () => setAppState('recording'),
-  onTranscribing: () => setAppState('transcribing'),
-  onFinalResult: (transcript) => {
-    finalTranscript = transcript;
-    transcriptText.textContent = transcript;
-  },
-  onError: (error) => {
-    showError(error);
-    redoTaskId = null;
-    setAppState('idle');
-  },
-  onEnd: () => {
-    if (finalTranscript.trim()) {
-      if (redoTaskId) {
-        submitVoiceRedo(redoTaskId, finalTranscript.trim());
-      } else {
-        submitVoiceInput(finalTranscript.trim());
-      }
-    } else {
+function initSpeech(): void {
+  const dgKey = getDeepgramKey();
+  if (!dgKey) return;
+
+  speech = createSpeechController(dgKey, {
+    onStart: () => setAppState('recording'),
+    onInterimResult: (transcript) => {
+      transcriptText.textContent = transcript;
+    },
+    onFinalResult: (transcript) => {
+      finalTranscript = transcript;
+      transcriptText.textContent = transcript;
+    },
+    onError: (error) => {
+      showError(error);
       redoTaskId = null;
       setAppState('idle');
-    }
-  },
-  onModelLoading: (progress) => {
-    transcriptText.textContent = `Loading speech model... ${Math.round(progress)}%`;
-  },
-});
+    },
+    onEnd: () => {
+      if (finalTranscript.trim()) {
+        if (redoTaskId) {
+          submitVoiceRedo(redoTaskId, finalTranscript.trim());
+        } else {
+          submitVoiceInput(finalTranscript.trim());
+        }
+      } else {
+        redoTaskId = null;
+        setAppState('idle');
+      }
+    },
+  });
+}
 
 async function submitVoiceInput(input: string): Promise<void> {
   setAppState('generating');
@@ -210,17 +206,13 @@ async function submitVoiceRedo(taskId: string, input: string): Promise<void> {
   }
 }
 
-// Fallback: if voice unsupported, show typing by default
-if (!speech.isSupported()) {
-  voiceBtn.classList.add('hidden');
-  voiceLabel.classList.add('hidden');
-  island.classList.add('typing');
-}
-
 // ── Voice button: tap to start/stop ──
 voiceBtn.addEventListener('click', () => {
+  if (!speech) {
+    showError('Set up your Deepgram API key in Settings first.');
+    return;
+  }
   if (appState === 'idle') {
-    // If typing, dismiss it first
     island.classList.remove('typing');
     taskInput.blur();
     finalTranscript = '';
@@ -232,7 +224,7 @@ voiceBtn.addEventListener('click', () => {
 
 // Voice redo handler
 setVoiceRedoHandler((taskId) => {
-  if (appState !== 'idle') return;
+  if (appState !== 'idle' || !speech) return;
   island.classList.remove('typing');
   redoTaskId = taskId;
   finalTranscript = '';
@@ -269,13 +261,22 @@ function showSetup(): void {
   if (key) {
     (document.getElementById('api-key') as HTMLInputElement).value = key;
   }
+  const dgKey = getDeepgramKey();
+  if (dgKey) {
+    (document.getElementById('deepgram-key') as HTMLInputElement).value = dgKey;
+  }
 }
 
 saveCredsBtn.addEventListener('click', () => {
   const key = (document.getElementById('api-key') as HTMLInputElement).value.trim();
+  const dgKey = (document.getElementById('deepgram-key') as HTMLInputElement).value.trim();
   if (!key) return;
   saveApiKey(key);
   initClient(key);
+  if (dgKey) {
+    saveDeepgramKey(dgKey);
+    initSpeech();
+  }
   showApp();
 });
 
@@ -402,6 +403,7 @@ if ('serviceWorker' in navigator) {
 const key = getApiKey();
 if (key) {
   initClient(key);
+  initSpeech();
   showApp();
 } else {
   showSetup();

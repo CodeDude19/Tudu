@@ -7,6 +7,7 @@ export interface Task {
 
 const TASKS_KEY = 'tudu_tasks';
 const API_KEY_KEY = 'tudu_api_key';
+const DEEPGRAM_KEY = 'tudu_deepgram_key';
 const HISTORY_KEY = 'tudu_history';
 
 export function getTasks(): Task[] {
@@ -28,6 +29,14 @@ export function saveApiKey(key: string): void {
 
 export function clearApiKey(): void {
   localStorage.removeItem(API_KEY_KEY);
+}
+
+export function getDeepgramKey(): string | null {
+  return localStorage.getItem(DEEPGRAM_KEY);
+}
+
+export function saveDeepgramKey(key: string): void {
+  localStorage.setItem(DEEPGRAM_KEY, key);
 }
 
 export function getHistory(): string[] {
