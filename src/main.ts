@@ -92,19 +92,18 @@ const archivePanel = document.getElementById('archive-panel')!;
 const archiveClose = document.getElementById('archive-close')!;
 
 // ── App state ──
-type AppState = 'idle' | 'recording' | 'generating';
+type AppState = 'idle' | 'recording' | 'transcribing' | 'generating';
 let appState: AppState = 'idle';
 let redoTaskId: string | null = null;
 
 function setAppState(state: AppState): void {
   appState = state;
-  island.classList.remove('recording', 'generating', 'typing');
+  island.classList.remove('recording', 'generating', 'transcribing', 'typing');
 
   switch (state) {
     case 'idle':
       voiceLabel.textContent = 'Speak';
       (voiceBtn as HTMLButtonElement).disabled = false;
-      // Animate dock elements out smoothly
       stopWaveform();
       if (!transcriptPreview.classList.contains('hidden')) {
         transcriptPreview.classList.add('dock-fade-out');
@@ -118,17 +117,26 @@ function setAppState(state: AppState): void {
       island.classList.add('recording');
       voiceLabel.textContent = 'Tap to stop';
       transcriptPreview.classList.remove('hidden');
+      transcriptPreview.classList.remove('dock-fade-out');
       transcriptStatus.textContent = redoTaskId ? 'Re-recording...' : 'Listening...';
       transcriptText.textContent = '';
-      transcriptText.classList.remove('interim');
       startWaveform();
+      break;
+    case 'transcribing':
+      island.classList.add('transcribing');
+      voiceLabel.textContent = 'Transcribing...';
+      (voiceBtn as HTMLButtonElement).disabled = true;
+      stopWaveform();
+      transcriptPreview.classList.remove('hidden');
+      transcriptPreview.classList.remove('dock-fade-out');
+      transcriptStatus.textContent = 'Transcribing...';
+      transcriptText.textContent = '';
       break;
     case 'generating':
       island.classList.add('generating');
       voiceLabel.textContent = redoTaskId ? 'Updating...' : 'Generating...';
       (voiceBtn as HTMLButtonElement).disabled = true;
       transcriptStatus.textContent = redoTaskId ? 'Updating task...' : 'Generating tasks...';
-      stopWaveform();
       break;
   }
 }
@@ -138,14 +146,10 @@ let finalTranscript = '';
 
 const speech = createSpeechController({
   onStart: () => setAppState('recording'),
-  onInterimResult: (transcript) => {
-    transcriptText.textContent = transcript;
-    transcriptText.classList.add('interim');
-  },
+  onTranscribing: () => setAppState('transcribing'),
   onFinalResult: (transcript) => {
     finalTranscript = transcript;
     transcriptText.textContent = transcript;
-    transcriptText.classList.remove('interim');
   },
   onError: (error) => {
     showError(error);
@@ -163,6 +167,9 @@ const speech = createSpeechController({
       redoTaskId = null;
       setAppState('idle');
     }
+  },
+  onModelLoading: (progress) => {
+    transcriptText.textContent = `Loading speech model... ${Math.round(progress)}%`;
   },
 });
 
@@ -220,9 +227,6 @@ voiceBtn.addEventListener('click', () => {
     speech.start();
   } else if (appState === 'recording') {
     speech.stop();
-    // Immediately collapse waveform + update status — don't wait for onEnd
-    stopWaveform();
-    transcriptStatus.textContent = 'Processing...';
   }
 });
 

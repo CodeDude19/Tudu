@@ -1,9 +1,12 @@
+import { pipeline } from '@huggingface/transformers';
+
 export interface SpeechCallbacks {
   onStart: () => void;
-  onInterimResult: (transcript: string) => void;
+  onTranscribing: () => void;
   onFinalResult: (transcript: string) => void;
   onError: (error: string) => void;
   onEnd: () => void;
+  onModelLoading: (progress: number) => void;
 }
 
 export interface SpeechController {
@@ -13,77 +16,109 @@ export interface SpeechController {
   isSupported: () => boolean;
 }
 
-const ERROR_MAP: Record<string, string> = {
-  'no-speech': 'No speech detected. Try again.',
-  'audio-capture': 'No microphone found.',
-  'not-allowed': 'Microphone permission denied.',
-  'network': 'Network error during recognition.',
-};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let transcriber: any = null;
+let modelLoading = false;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getTranscriber(onProgress: (p: number) => void): Promise<any> {
+  if (transcriber) return transcriber;
+  if (modelLoading) throw new Error('Model is still loading');
+  modelLoading = true;
+  try {
+    transcriber = await pipeline(
+      'automatic-speech-recognition',
+      'onnx-community/whisper-tiny.en',
+      {
+        dtype: 'q8' as const,
+        device: 'wasm' as const,
+        progress_callback: (p: Record<string, unknown>) => {
+          if (typeof p.progress === 'number') onProgress(p.progress);
+        },
+      } as Parameters<typeof pipeline>[2],
+    );
+    return transcriber;
+  } finally {
+    modelLoading = false;
+  }
+}
 
 export function createSpeechController(callbacks: SpeechCallbacks): SpeechController {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const supported = typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
 
-  if (!SR) {
+  if (!supported) {
     return {
-      start: () => callbacks.onError('Speech recognition is not supported in this browser.'),
+      start: () => callbacks.onError('Audio recording is not supported in this browser.'),
       stop: () => {},
       isListening: () => false,
       isSupported: () => false,
     };
   }
 
-  const recognition = new SR();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = 'en-US';
-  recognition.maxAlternatives = 1;
-
+  let mediaRecorder: MediaRecorder | null = null;
+  let audioChunks: Blob[] = [];
   let listening = false;
-  let accumulated = '';
+  let stream: MediaStream | null = null;
 
-  recognition.onstart = () => {
-    listening = true;
-    accumulated = '';
-    callbacks.onStart();
-  };
+  async function startRecording(): Promise<void> {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunks = [];
+      mediaRecorder = new MediaRecorder(stream);
 
-  recognition.onresult = (event: SpeechRecognitionEvent) => {
-    let full = '';
-    for (let i = 0; i < event.results.length; i++) {
-      full += event.results[i][0].transcript;
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Release mic
+        stream?.getTracks().forEach((t) => t.stop());
+        stream = null;
+
+        if (audioChunks.length === 0) {
+          callbacks.onError('No audio recorded.');
+          callbacks.onEnd();
+          return;
+        }
+
+        const audioBlob = new Blob(audioChunks, { type: mediaRecorder!.mimeType });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        callbacks.onTranscribing();
+
+        try {
+          const model = await getTranscriber(callbacks.onModelLoading);
+          const result = await model(audioUrl);
+          URL.revokeObjectURL(audioUrl);
+          const text = (result as { text: string }).text?.trim() || '';
+          if (text) {
+            callbacks.onFinalResult(text);
+          } else {
+            callbacks.onError('No speech detected. Try again.');
+          }
+        } catch (err) {
+          callbacks.onError(err instanceof Error ? err.message : 'Transcription failed.');
+        }
+        callbacks.onEnd();
+      };
+
+      mediaRecorder.start(250); // collect chunks every 250ms
+      listening = true;
+      callbacks.onStart();
+    } catch (err) {
+      const msg = err instanceof DOMException && err.name === 'NotAllowedError'
+        ? 'Microphone permission denied.'
+        : 'Failed to access microphone.';
+      callbacks.onError(msg);
     }
-
-    // Check if latest result is final
-    const latest = event.results[event.results.length - 1];
-    if (latest.isFinal) {
-      accumulated = full;
-      callbacks.onFinalResult(full);
-    } else {
-      callbacks.onInterimResult(full);
-    }
-  };
-
-  recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-    listening = false;
-    callbacks.onError(ERROR_MAP[event.error] || `Speech error: ${event.error}`);
-  };
-
-  recognition.onend = () => {
-    listening = false;
-    if (accumulated) {
-      callbacks.onFinalResult(accumulated);
-    }
-    callbacks.onEnd();
-  };
+  }
 
   return {
-    start: () => {
-      if (!listening) {
-        try { recognition.start(); } catch { /* already started */ }
-      }
-    },
+    start: () => { startRecording(); },
     stop: () => {
-      if (listening) recognition.stop();
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        listening = false;
+        mediaRecorder.stop();
+      }
     },
     isListening: () => listening,
     isSupported: () => true,

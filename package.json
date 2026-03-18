@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.77",
+    "@huggingface/transformers": "^3.8.1",
     "ai": "^6.0.116",
     "typescript": "^5.9.3",
     "vite": "^8.0.0"
