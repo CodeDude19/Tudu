@@ -141,7 +141,7 @@ function initSpeech(): void {
   if (!dgKey) return;
 
   speech = createSpeechController(dgKey, {
-    onStart: () => setAppState('recording'),
+    onStart: () => { /* UI already updated on tap */ },
     onInterimResult: (transcript) => {
       transcriptText.textContent = transcript;
     },
@@ -216,6 +216,8 @@ voiceBtn.addEventListener('click', () => {
     island.classList.remove('typing');
     taskInput.blur();
     finalTranscript = '';
+    // Immediately show recording state — don't wait for mic + WebSocket
+    setAppState('recording');
     speech.start();
   } else if (appState === 'recording') {
     speech.stop();

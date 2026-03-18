@@ -32,28 +32,46 @@ export function createSpeechController(apiKey: string, callbacks: SpeechCallback
   let ws: WebSocket | null = null;
   let listening = false;
   let accumulated = '';
+  let wsReady = false;
+  let pendingChunks: ArrayBuffer[] = [];
 
   async function startRecording(): Promise<void> {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       accumulated = '';
+      wsReady = false;
+      pendingChunks = [];
 
-      // Connect to Deepgram WebSocket
+      // Start recording IMMEDIATELY — don't wait for WebSocket
+      mediaRecorder = new MediaRecorder(stream, { mimeType: getSupportedMimeType() });
+
+      mediaRecorder.ondataavailable = (e: BlobEvent) => {
+        if (e.data.size === 0) return;
+        e.data.arrayBuffer().then((buf) => {
+          if (wsReady && ws?.readyState === WebSocket.OPEN) {
+            // WebSocket ready — send directly
+            ws.send(buf);
+          } else {
+            // Buffer until WebSocket opens
+            pendingChunks.push(buf);
+          }
+        });
+      };
+
+      mediaRecorder.start(100);
+      listening = true;
+      callbacks.onStart();
+
+      // Connect to Deepgram WebSocket IN PARALLEL
       ws = new WebSocket(DG_WS_URL, ['token', apiKey]);
 
       ws.onopen = () => {
-        // Start MediaRecorder and pipe audio chunks to WebSocket
-        mediaRecorder = new MediaRecorder(stream!, { mimeType: getSupportedMimeType() });
-
-        mediaRecorder.ondataavailable = (e: BlobEvent) => {
-          if (e.data.size > 0 && ws?.readyState === WebSocket.OPEN) {
-            e.data.arrayBuffer().then((buf) => ws?.send(buf));
-          }
-        };
-
-        mediaRecorder.start(100);
-        listening = true;
-        callbacks.onStart();
+        // Flush all buffered audio chunks
+        for (const chunk of pendingChunks) {
+          ws!.send(chunk);
+        }
+        pendingChunks = [];
+        wsReady = true;
       };
 
       ws.onmessage = (event) => {
@@ -92,6 +110,8 @@ export function createSpeechController(apiKey: string, callbacks: SpeechCallback
 
   function cleanup(): void {
     listening = false;
+    wsReady = false;
+    pendingChunks = [];
     if (mediaRecorder && mediaRecorder.state === 'recording') {
       mediaRecorder.stop();
     }
